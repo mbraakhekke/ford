@@ -50,8 +50,17 @@ NOTE_RE = [
     re.compile(r"@({})\s*(.*?)\s*</p>".format(note), re.IGNORECASE | re.DOTALL)
     for note in NOTE_TYPE
 ]
-LINK_RE = re.compile(r"\[\[(\w+(?:\.\w+)?)(?:\((\w+)\))?(?::(\w+)(?:\((\w+)\))?)?\]\]")
 
+LINK_RE = re.compile(r"""
+    (href|title)?       # href or title attribute, hyperlink only
+    \s*=?\s*\"?         # isequal sign and opening double quotes, hyperlink only
+    (?:\[\[|\|\|)       # opening brackets or pipes
+    (\w+(?:\.\w+)?)     # link name
+    (?:\((\w+)\))?      # link type
+    (?::(\w+)           # sublink name
+    (?:\((\w+)\))?)?    # sublink type
+    (?:\]\]|\|\|)       # closing brackets or pipes
+    \"?""",re.VERBOSE)  # closing double quotes, hyperlink only
 
 # Dictionary for all macro definitions to be used in the documentation.
 # Each key of the form |name| will be replaced by the value found in the
@@ -258,42 +267,49 @@ def sub_links(string, project):
 
     def convert_link(match):
         ERR = "Warning: Could not substitute link {}. {}"
+        
+        match_groups =  [*match.groups()]
+
+        # in case of a hyperlink the first group will be either "href" or "title"; otherwise it will be empty
+        hyperlink_part = match_groups.pop(0)
+        is_hyperlink = bool(hyperlink_part)
+        
         url = ""
         name = ""
         found = False
         searchlist = []
         item = None
         # [name,obj,subname,subobj]
-        if not match.group(2):
+        if not match_groups[1]:
             for key, val in LINK_TYPES.items():
                 searchlist.extend(getattr(project, val))
         else:
-            if match.group(2).lower() in LINK_TYPES:
-                searchlist.extend(getattr(project, LINK_TYPES[match.group(2).lower()]))
+            if match_groups[1].lower() in LINK_TYPES:
+                searchlist.extend(getattr(project, LINK_TYPES[match_groups[1].lower()]))
             else:
                 print(
                     ERR.format(
                         match.group(),
-                        'Unrecognized classification "{}".'.format(match.group(2)),
+                        'Unrecognized classification "{}".'.format(match_groups[1]),
                     )
                 )
                 return match.group()
 
         for obj in searchlist:
-            if match.group(1).lower() == obj.name.lower():
+            if match_groups[0].lower() == obj.name.lower():
                 url = obj.get_url()
                 name = obj.name
                 found = True
                 item = obj
                 break
         else:
-            print(ERR.format(match.group(), '"{}" not found.'.format(match.group(1))))
+            print(ERR.format(match.group(), '"{}" not found.'.format(match_groups[0])))
             url = ""
-            name = match.group(1)
+            name = match_groups[0]
 
-        if found and match.group(3):
+        if found and match_groups[2]:
             searchlist = []
-            if not match.group(4):
+            if not match_groups[3]:
                 for key, val in SUBLINK_TYPES.items():
                     if val == "constructor":
                         if getattr(item, "constructor", False):
@@ -303,21 +319,21 @@ def sub_links(string, project):
                     else:
                         searchlist.extend(getattr(item, val, []))
             else:
-                if match.group(4).lower() in SUBLINK_TYPES:
-                    if hasattr(item, SUBLINK_TYPES[match.group(4).lower()]):
-                        if match.group(4).lower() == "constructor":
+                if match_groups[3].lower() in SUBLINK_TYPES:
+                    if hasattr(item, SUBLINK_TYPES[match_groups[3].lower()]):
+                        if match_groups[3].lower() == "constructor":
                             if item.constructor:
                                 searchlist.append(item.constructor)
                         else:
                             searchlist.extend(
-                                getattr(item, SUBLINK_TYPES[match.group(4).lower()])
+                                getattr(item, SUBLINK_TYPES[match_groups[3].lower()])
                             )
                     else:
                         print(
                             ERR.format(
                                 match.group(),
                                 '"{}" can not be contained in "{}"'.format(
-                                    match.group(4), item.obj
+                                    match_groups[3], item.obj
                                 ),
                             )
                         )
@@ -326,13 +342,13 @@ def sub_links(string, project):
                     print(
                         ERR.format(
                             match.group(),
-                            'Unrecognized classification "{}".'.format(match.group(2)),
+                            'Unrecognized classification "{}".'.format(match_groups[1]),
                         )
                     )
                     return match.group()
 
             for obj in searchlist:
-                if match.group(3).lower() == obj.name.lower():
+                if match_groups[2].lower() == obj.name.lower():
                     url = url + "#" + obj.anchor
                     name = obj.name
                     item = obj
@@ -342,15 +358,24 @@ def sub_links(string, project):
                     ERR.format(
                         match.group(),
                         '"{0}" not found in "{1}", linking to page for "{1}" instead.'.format(
-                            match.group(3), name
+                            match_groups[2], name
                         ),
                     )
                 )
 
-        if found:
-            return '<a href="{}">{}</a>'.format(url, name)
+        if is_hyperlink:
+            if found:
+                if hyperlink_part == "href":
+                    return "href=\""+url+"\""
+                elif hyperlink_part == "title":
+                    return "title=\""+name+"\""
+            else:
+            	return name
         else:
-            return "<a>{}</a>".format(name)
+            if found:
+                return '<a href="{}">{}</a>'.format(url, name)
+            else:
+                return "<a>{}</a>".format(name)
 
     # Get information from links (need to build an RE)
     string = LINK_RE.sub(convert_link, string)
